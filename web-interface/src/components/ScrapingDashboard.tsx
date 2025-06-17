@@ -52,57 +52,104 @@ export default function ScrapingDashboard({
       // Update job status to running
       onJobUpdate(jobId, { status: 'running', logs: ['Starting scrape job...'] })
 
-      const response = await fetch('/api/scrape', {
+      // Map job types to API endpoints and request formats
+      let endpoint = ''
+      let requestBody = {}
+
+      switch (type) {
+        case 'all':
+          endpoint = '/scrape/all'
+          requestBody = {
+            google_drive_pdf_url: config.pdfUrl || null,
+            config: {
+              delay_between_requests: config.delay,
+              max_retries: config.maxRetries,
+              timeout: config.timeout
+            }
+          }
+          break
+        
+        case 'interviewing-io':
+          endpoint = '/scrape/interviewing-io/all'
+          requestBody = {
+            config: {
+              delay_between_requests: config.delay,
+              max_retries: config.maxRetries,
+              timeout: config.timeout
+            }
+          }
+          break
+        
+        case 'nilmamano':
+          endpoint = '/scrape/nilmamano'
+          requestBody = {
+            config: {
+              delay_between_requests: config.delay,
+              max_retries: config.maxRetries,
+              timeout: config.timeout
+            }
+          }
+          break
+        
+        case 'generic-blog':
+          if (!config.blogUrl) {
+            throw new Error('Blog URL is required for generic blog scraping')
+          }
+          endpoint = '/scrape/generic-blog'
+          requestBody = {
+            blog_url: config.blogUrl,
+            config: {
+              delay_between_requests: config.delay,
+              max_retries: config.maxRetries,
+              timeout: config.timeout
+            }
+          }
+          break
+        
+        case 'pdf':
+          if (!config.pdfUrl) {
+            throw new Error('PDF URL or path is required for PDF processing')
+          }
+          endpoint = '/scrape/pdf'
+          requestBody = {
+            pdf_url_or_path: config.pdfUrl,
+            max_chapters: config.maxChapters || 8,
+            config: {
+              delay_between_requests: config.delay,
+              max_retries: config.maxRetries,
+              timeout: config.timeout
+            }
+          }
+          break
+        
+        default:
+          throw new Error(`Unknown job type: ${type}`)
+      }
+
+      const response = await fetch(`http://localhost:8000${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ type, config, jobId }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        const errorText = await response.text()
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`)
       }
 
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          const chunk = decoder.decode(value)
-          const lines = chunk.split('\n').filter(line => line.trim())
-
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line)
-              
-              if (data.type === 'progress') {
-                onJobUpdate(jobId, { 
-                  progress: data.progress,
-                  logs: [...job.logs, data.message]
-                })
-              } else if (data.type === 'complete') {
-                onJobComplete(jobId, data.result)
-                toast.success(`${type} scraping completed successfully!`)
-                return
-              } else if (data.type === 'error') {
-                onJobUpdate(jobId, { 
-                  status: 'failed', 
-                  error: data.error,
-                  logs: [...job.logs, `Error: ${data.error}`]
-                })
-                toast.error(`Scraping failed: ${data.error}`)
-                return
-              }
-            } catch (e) {
-              // Ignore malformed JSON lines
-            }
-          }
-        }
-      }
+      const result = await response.json()
+      
+      // Update progress to 100% and mark as completed
+      onJobUpdate(jobId, { 
+        progress: 100,
+        status: 'completed',
+        logs: [...job.logs, 'Scraping completed successfully!']
+      })
+      
+      onJobComplete(jobId, result)
+      toast.success(`${type} scraping completed successfully! Scraped ${result.total_scraped || 'N/A'} items.`)
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
